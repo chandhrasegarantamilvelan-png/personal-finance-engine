@@ -43,7 +43,7 @@ if module == "Select...":
 
 elif module == "Loan Decision Engine":
     # subtitle
-    st.subheader("Loan Decision Module")
+    st.subheader("⚖️ Loan Decision Engine")
 
     # description
     st.write("This tool helps you evaluate whether a loan is safe based on your financial profile.")
