@@ -5,13 +5,13 @@ from loan_module import calculate_emi, get_risk
 from closure_module import (
     calculate_surplus,
     calculate_new_tenure,
-    calculate_interest,
     calculate_with_lumpsum,
     calculate_combined_strategy,
     suggest_optimal_payment,
     simulate_loan,
     simulate_loan_with_lumpsum,
-    simulate_combined_strategy
+    simulate_combined_strategy,
+    calculate_tenure_from_emi
 )
 
 # app title
@@ -306,6 +306,8 @@ elif module == "Loan Closure Planner":
         ["At year-end (12th month)", "Apply immediately (recommended for short-term loans)"]
     )
 
+    immediate = lump_mode == "Apply immediately (recommended for short-term loans)"
+
     # calculate monthly rate
     monthly_rate = interest_rate / (12 * 100)
 
@@ -340,10 +342,53 @@ elif module == "Loan Closure Planner":
     )
 
     if abs(expected_emi - current_emi) > 200:  # tolerance ₹200
+        difference = current_emi - expected_emi
+
         st.warning(
-            f"⚠️ Your EMI may not align with loan details.\n\n"
-            f"Expected EMI: {currency_symbol}{expected_emi:,.0f}"
+            f"⚠️ We noticed a mismatch in your loan inputs.\n\n"
+            f"📊 Expected EMI: {currency_symbol}{expected_emi:,.0f}\n"
+            f"💳 Your EMI: {currency_symbol}{current_emi:,.0f}\n\n"
+            f"💡 This difference may affect your loan duration and total interest."
         )
+
+    if abs(expected_emi - current_emi) > 200:
+
+        implied_tenure = calculate_tenure_from_emi(
+            current_loan,
+            monthly_rate,
+            current_emi
+        )
+
+        tenure_diff = abs(implied_tenure - total_tenure) if implied_tenure else 0
+
+        st.warning(
+            f"⚠️ EMI mismatch detected\n\n"
+            f"Expected EMI: {currency_symbol}{expected_emi:,.0f}\n"
+            f"Your EMI: {currency_symbol}{current_emi:,.0f}"
+        )
+
+        # Decision UI
+        if implied_tenure and tenure_diff >= 1:
+
+            correction_choice = st.radio(
+                "How would you like to proceed?",
+                [
+                    f"Use corrected EMI ({currency_symbol}{expected_emi:,.0f})",
+                    f"Keep EMI and adjust tenure (~{int(implied_tenure)} months)"
+                ]
+            )
+
+            if "Use corrected EMI" in correction_choice:
+                current_emi = expected_emi
+
+            else:
+                total_tenure = int(implied_tenure)
+
+        else:
+            st.info(
+                f"💡 Minor mismatch detected. Adjusting EMI to {currency_symbol}{expected_emi:,.0f} is recommended."
+            )
+            current_emi = expected_emi
 
     new_tenure = calculate_new_tenure(
         remaining_principal,
@@ -355,6 +400,7 @@ elif module == "Loan Closure Planner":
     original_total_payment = current_emi * remaining_months
     
     st.subheader("📊 Loan Status Overview")
+
 
     st.write(f"Total Loan Payable: {currency_symbol}{total_payment:,.2f}")
     st.write(f"Total Interest: {currency_symbol}{total_interest:,.2f}")
@@ -382,13 +428,6 @@ elif module == "Loan Closure Planner":
     st.subheader("📉 Loan Closure Impact Overview")
     st.caption("Explore how different repayment strategies affect your loan tenure and total interest paid.")
     
-    # original interest
-    original_interest = calculate_interest(
-        remaining_principal,
-        monthly_rate,
-        current_emi,
-        remaining_months
-    )
 
     # simulate original loan
     original_total_payment, original_interest, _ = simulate_loan(
@@ -397,6 +436,7 @@ elif module == "Loan Closure Planner":
         current_emi
     )
 
+    # Monthly strategy
     new_total_payment, new_interest, sim_months = simulate_loan(
         remaining_principal,
         monthly_rate,
@@ -406,18 +446,90 @@ elif module == "Loan Closure Planner":
     interest_saved = original_interest - new_interest
     new_tenure = sim_months
 
-    st.markdown("### 💳 With Extra Monthly Payment")
+
+    # Lump sum strategy
+    lump_total_payment, lump_interest, sim_months = simulate_loan_with_lumpsum(
+        remaining_principal,
+        monthly_rate,
+        current_emi,
+        yearly_lump,
+        immediate
+    )
+
+    lump_saved = original_interest - lump_interest
+    lump_tenure = sim_months
+
+
+    # Combined strategy
+    combined_total_payment, sim_months = simulate_combined_strategy(
+        remaining_principal,
+        monthly_rate,
+        current_emi,
+        extra_payment,
+        yearly_lump,
+        immediate
+    )
+
+    combined_saved = original_total_payment - combined_total_payment
+    combined_tenure = sim_months
+
+    strategy_scores = {
+        "Monthly Extra Payment": interest_saved,
+        "Yearly Lump Sum": lump_saved,
+        "Combined Strategy": combined_saved
+    }
+
+    valid_strategies = {k: v for k, v in strategy_scores.items() if v > 0}
+
+    best_strategy = max(valid_strategies, key=valid_strategies.get) if valid_strategies else None
+
+    if best_strategy == "Monthly Extra Payment":
+        st.markdown("### 💳 With Extra Monthly Payment 🏆 Recommended")
+    else:
+        st.markdown("### 💳 With Extra Monthly Payment")
 
     if new_tenure:
         reduction = max(0, remaining_months - new_tenure)
 
         st.success(
-            f"You can close your loan in **{new_tenure} months** "
-            f"and save **{currency_symbol}{interest_saved:,.0f}** in interest.\n\n"
-            f"📉 You finish your loan **{reduction} months earlier**."
+            f"🚀 You can become debt-free in **{new_tenure} months**\n\n"
+            f"💰 Interest saved: **{currency_symbol}{interest_saved:,.0f}**\n"
+            f"⏳ Time saved: **{reduction} months earlier**"
         )
+        progress = reduction / remaining_months if remaining_months > 0 else 0
 
+        st.progress(min(progress, 1.0))
 
+        st.caption(f"📊 You reduce your loan duration by **{progress*100:.1f}%**")
+
+        percent_options = [25, 50, 75, 100, 150, 200, 300]
+
+        with st.expander("📈 Additional Insights: Increase Your Monthly Payment"):
+        
+            for pct in percent_options:
+
+                extra_candidate = (pct / 100) * current_emi
+
+                # only show if within surplus
+                if extra_candidate <= available_extra:
+
+                    total_emi = current_emi + extra_candidate
+
+                    sim_total, sim_interest, sim_months = simulate_loan(
+                        remaining_principal,
+                        monthly_rate,
+                        total_emi
+                    )
+
+                    tenure_reduction = max(0, remaining_months - sim_months)
+                    interest_saving = original_interest - sim_interest
+
+                    st.write(
+                        f"💡 Increasing EMI by **{pct}%** "
+                        f"(+{currency_symbol}{extra_candidate:,.0f}) → "
+                        f"Close in **{sim_months} months**, "
+                        f"save **{currency_symbol}{interest_saving:,.0f}**"
+                    )
     lump_tenure = calculate_with_lumpsum(
         remaining_principal,
         monthly_rate,
@@ -426,46 +538,38 @@ elif module == "Loan Closure Planner":
     )
 
     # simulate lump sum strategy
-    if lump_mode == "Apply immediately (recommended for short-term loans)":
-        # apply lump at start
-        adjusted_principal = remaining_principal - yearly_lump
+    immediate = lump_mode == "Apply immediately (recommended for short-term loans)"
 
-        # safety check
-        if adjusted_principal <= 0:
-            lump_total_payment = yearly_lump
-            lump_interest = 0
-            sim_months = 1
-        else:
-            lump_total_payment, lump_interest, sim_months = simulate_loan(
-                adjusted_principal,
-                monthly_rate,
-                current_emi
-            )
+    lump_total_payment, lump_interest, sim_months = simulate_loan_with_lumpsum(
+        remaining_principal,
+        monthly_rate,
+        current_emi,
+        yearly_lump,
+        immediate
+    )
+
+    lump_saved = original_interest - lump_interest
+    lump_tenure = sim_months
+
+    if best_strategy == "Yearly Lump Sum":
+        st.markdown("### 📅 With Yearly Lump Sum 🏆 Recommended")
     else:
-        # default yearly lump logic
-        lump_total_payment, lump_interest, sim_months = simulate_loan_with_lumpsum(
-            remaining_principal,
-            monthly_rate,
-            current_emi,
-            yearly_lump
-        )
-
-    lump_saved = original_interest - lump_interest
-    lump_tenure = sim_months
-
-    lump_saved = original_interest - lump_interest
-    lump_tenure = sim_months
-
-    st.markdown("### 📅 With Yearly Lump Sum")
+        st.markdown("### 📅 With Yearly Lump Sum")
 
     if lump_tenure:
         reduction =max(0, remaining_months - lump_tenure) 
 
         st.success(
-            f"You can close your loan in **{lump_tenure} months** "
-            f"and save **{currency_symbol}{lump_saved:,.0f}** in interest.\n\n"
-            f"📉 You finish your loan **{reduction} months earlier**."
+            f"🚀 You can become debt-free in **{lump_tenure} months**\n\n"
+            f"💰 Interest saved: **{currency_symbol}{lump_saved:,.0f}**\n"
+            f"⏳ Time saved: **{reduction} months earlier**"
         )
+        progress = reduction / remaining_months if remaining_months > 0 else 0
+
+        st.progress(min(progress, 1.0))
+
+        st.caption(f"📊 You reduce your loan duration by **{progress*100:.1f}%**")
+    
     # calculate alternate scenario for comparison
 
     if yearly_lump > 0:
@@ -502,26 +606,35 @@ elif module == "Loan Closure Planner":
                 )
     st.divider()
 
-    st.markdown("### 🧠 Insight")
+    st.markdown("### 🧠 Smart Insight")
 
     if lump_mode == "Apply immediately (recommended for short-term loans)":
-        st.success("✅ You chose to apply the lump sum immediately — this maximizes interest savings.")
+        st.success(
+            "🚀 Applying the lump sum early reduces your principal immediately, "
+            "helping you save significantly on interest over time."
+        )
     else:
-        st.warning("⚠️ You chose to apply the lump sum at year-end — this may reduce its effectiveness.")
-      
+        st.info(
+            "💡 Delaying the lump sum means interest continues to accumulate on a higher principal. "
+            "Applying it earlier could improve savings."
+        )
 
     combined_total_payment, sim_months = simulate_combined_strategy(
         remaining_principal,
         monthly_rate,
         current_emi,
         extra_payment,
-        yearly_lump
+        yearly_lump,
+        immediate
     )
 
     combined_saved = original_total_payment - combined_total_payment
     combined_tenure = sim_months
 
-    st.markdown("### 🚀 Combined Strategy (Monthly + Yearly)")
+    if best_strategy == "Combined Strategy":
+        st.markdown("### 🚀 Combined Strategy (Monthly + Yearly) 🏆 Recommended")
+    else:
+        st.markdown("### 🚀 Combined Strategy (Monthly + Yearly)")
 
     if combined_tenure:
         reduction = max(0, remaining_months - combined_tenure)
@@ -531,10 +644,15 @@ elif module == "Loan Closure Planner":
                 "So the combined strategy performs the same as the monthly strategy."
             )
             st.success(
-                f"You can close your loan in **{combined_tenure} months** "
-                f"and save **{currency_symbol}{combined_saved:,.0f}** in interest.\n\n"
-                f"📉 You finish your loan **{reduction} months earlier**."
+                f"🚀 You can become debt-free in **{combined_tenure} months**\n\n"
+                f"💰 Interest saved: **{currency_symbol}{combined_saved:,.0f}**\n"
+                f"⏳ Time saved: **{reduction} months earlier**"
             )
+            progress = reduction / remaining_months if remaining_months > 0 else 0
+
+            st.progress(min(progress, 1.0))
+
+            st.caption(f"📊 You reduce your loan duration by **{progress*100:.1f}%**")
     
     # ensure values exist safely
     interest_saved = locals().get('interest_saved', 0)
@@ -551,20 +669,6 @@ elif module == "Loan Closure Planner":
     lump_score = lump_saved
     combined_score = combined_saved 
     
-    # determine best strategy
-    strategy_scores = {
-        "Monthly Extra Payment": monthly_score,
-        "Yearly Lump Sum": lump_score,
-        "Combined Strategy": combined_score
-    }
-
-    # filter only valid strategies
-    valid_strategies = {k: v for k, v in strategy_scores.items() if v > 0}
-
-    if valid_strategies:
-        best_strategy = max(valid_strategies, key=valid_strategies.get)
-    else:
-        best_strategy = None
 
     optimal_extra, optimal_tenure = suggest_optimal_payment(
         remaining_principal,
@@ -575,31 +679,57 @@ elif module == "Loan Closure Planner":
 
     if best_strategy:
         st.markdown("## 🏆 Best Strategy for You")
-        st.caption(
-        "💡 Monthly extra payments reduce your loan tenure faster, while lump sum payments reduce total interest more significantly."
-    )
 
+        # determine values
         if best_strategy == "Monthly Extra Payment":
             best_value = interest_saved
             best_months = max(0, remaining_months - new_tenure)
+            action = "Increase your EMI every month to reduce tenure faster."
 
         elif best_strategy == "Yearly Lump Sum":
             best_value = lump_saved
             best_months = max(0, remaining_months - lump_tenure)
+            action = "Use planned yearly lump sum payments to cut interest cost."
 
         else:
             best_value = combined_saved
             best_months = max(0, remaining_months - combined_tenure)
+            action = "Combine monthly extra payments with yearly lump sum for maximum benefit."
+        emoji = {
+            "Monthly Extra Payment": "💳",
+            "Yearly Lump Sum": "📅",
+            "Combined Strategy": "🚀"
+        }.get(best_strategy, "📊")
 
-        st.success(
-            f"🎯 **{best_strategy} is the most effective option for you**\n\n"
-            f"💰 You save **{currency_symbol}{best_value:,.0f}** in interest\n"
-            f"⏳ You close your loan **{best_months} months earlier**"
+        # progress calculation
+        progress = best_months / remaining_months if remaining_months > 0 else 0
+
+        # UI card
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, #1f2937, #111827);
+                padding: 20px;
+                border-radius: 15px;
+                color: white;
+                box-shadow: 0px 6px 25px rgba(0,0,0,0.25);
+            ">
+                <h2 style="margin-bottom:10px;">{emoji} {best_strategy}</h2>
+                <p><b>💰 Interest Saved:</b> {currency_symbol}{best_value:,.0f}</p>
+                <p><b>⏳ Time Saved:</b> {best_months} months</p>
+                <p><b>👉 What you should do:</b> {action}</p>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-    else:
-        st.warning("No strategy provides meaningful improvement with current inputs.")
-    
 
+        # visual progress
+        st.progress(min(progress, 1.0))
+        st.caption(f"📊 You reduce your loan duration by **{progress*100:.1f}%**")
+
+    else:
+        st.warning("⚠️ No strategy provides meaningful improvement with current inputs.")
+        
     import pandas as pd
 
     # round tenure

@@ -29,13 +29,13 @@ def calculate_new_tenure(P, r, emi, extra_payment):
 
     return months
 
-def calculate_interest(P, r, emi, months):
-    total_paid = emi * months
-    interest_paid = total_paid - P
-    return interest_paid
 
-def calculate_with_lumpsum(P, r, emi, yearly_lump):
+
+def calculate_with_lumpsum(P, r, emi, yearly_lump, immediate=False):
     months = 0
+
+    # decide when lump starts
+    lump_start = 1 if immediate else 12
 
     while P > 0:
         interest = P * r
@@ -44,21 +44,29 @@ def calculate_with_lumpsum(P, r, emi, yearly_lump):
         if principal <= 0:
             return None
 
+        # normal EMI payment
         P -= principal
         months += 1
 
-        # every 12 months → apply lump sum
-        if months % 12 == 0 and yearly_lump > 0:
-            P -= yearly_lump
+        # apply lump sum at correct intervals
+        if (
+            yearly_lump > 0 and
+            months >= lump_start and
+            (months - lump_start) % 12 == 0
+        ):
+            P = max(0, P - yearly_lump)
 
         if months > 1000:
             return None
 
     return months
 
-def calculate_combined_strategy(P, r, emi, extra_payment, yearly_lump):
+def calculate_combined_strategy(P, r, emi, extra_payment, yearly_lump, immediate=False):
     total_payment = emi + extra_payment
     months = 0
+
+    # decide when lump starts
+    lump_start = 1 if immediate else 12
 
     while P > 0:
         interest = P * r
@@ -67,12 +75,17 @@ def calculate_combined_strategy(P, r, emi, extra_payment, yearly_lump):
         if principal <= 0:
             return None
 
+        # EMI payment
         P -= principal
         months += 1
 
-        # apply yearly lump sum
-        if months % 12 == 0 and yearly_lump > 0:
-            P -= yearly_lump
+        # apply lump sum AFTER EMI
+        if (
+            yearly_lump > 0 and
+            months >= lump_start and
+            (months - lump_start) % 12 == 0
+        ):
+            P = max(0, P - yearly_lump)
 
         if months > 1000:
             return None
@@ -122,10 +135,13 @@ def simulate_loan(P, r, emi):
 
     return total_paid, total_interest, months
 
-def simulate_loan_with_lumpsum(P, r, emi, yearly_lump):
+def simulate_loan_with_lumpsum(P, r, emi, yearly_lump, immediate=False):
     total_paid = 0
     total_interest = 0
     months = 0
+
+    # decide when lump starts
+    lump_start = 1 if immediate else 12
 
     while P > 0:
         interest = P * r
@@ -134,17 +150,24 @@ def simulate_loan_with_lumpsum(P, r, emi, yearly_lump):
         if principal <= 0:
             break
 
+        # last payment case
         if principal >= P:
             total_interest += interest
             total_paid += P + interest
             break
 
+        # normal EMI
         P -= principal
         total_paid += emi
         total_interest += interest
         months += 1
 
-        if months % 12 == 0 and yearly_lump > 0:
+        # apply lump sum AFTER EMI
+        if (
+            yearly_lump > 0 and
+            months >= lump_start and
+            (months - lump_start) % 12 == 0
+        ):
             if yearly_lump >= P:
                 total_paid += P
                 break
@@ -153,33 +176,60 @@ def simulate_loan_with_lumpsum(P, r, emi, yearly_lump):
 
     return total_paid, total_interest, months
 
-def simulate_combined_strategy(P, r, emi, extra_payment, yearly_lump):
+def simulate_combined_strategy(P, r, emi, extra_payment, yearly_lump, immediate=False):
     total_paid = 0
     months = 0
 
+    total_emi = emi + extra_payment
+
+    # decide when lump starts
+    lump_start = 1 if immediate else 12
+
     while P > 0:
-        # apply yearly lump BEFORE EMI interest calculation
-        if months % 12 == 0 and months != 0 and yearly_lump > 0:
-            if yearly_lump >= P:
-                total_paid += P
-                break
-            P -= yearly_lump
-            total_paid += yearly_lump
-
-        total_emi = emi + extra_payment
-
         interest = P * r
         principal = total_emi - interest
 
         if principal <= 0:
             break
 
+        # last payment
         if principal >= P:
             total_paid += P + interest
             break
 
+        # normal EMI
         P -= principal
         total_paid += total_emi
         months += 1
 
+        # apply lump AFTER EMI (IMPORTANT)
+        if (
+            yearly_lump > 0 and
+            months >= lump_start and
+            (months - lump_start) % 12 == 0
+        ):
+            if yearly_lump >= P:
+                total_paid += P
+                break
+            P -= yearly_lump
+            total_paid += yearly_lump
+
     return total_paid, months
+
+def calculate_tenure_from_emi(P, r, emi):
+    months = 0
+
+    while P > 0:
+        interest = P * r
+        principal = emi - interest
+
+        if principal <= 0:
+            return None  # EMI too low
+
+        P -= principal
+        months += 1
+
+        if months > 1000:
+            return None
+
+    return months
