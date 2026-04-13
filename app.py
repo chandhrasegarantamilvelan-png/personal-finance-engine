@@ -15,13 +15,8 @@ from closure_module import (
 )
 
 # app title
-st.title("💼 Personal Finance Decision Engine")
+st.title("💼 Personal Finance Engine")
 
-# subtitle
-st.subheader("Loan Decision Module")
-
-# description
-st.write("This tool helps you evaluate whether a loan is safe based on your financial profile.")
 
 # module selector
 module = st.selectbox(
@@ -47,6 +42,12 @@ if module == "Select...":
     st.info("Please select a module to continue.")
 
 elif module == "Loan Decision Engine":
+    # subtitle
+    st.subheader("Loan Decision Module")
+
+    # description
+    st.write("This tool helps you evaluate whether a loan is safe based on your financial profile.")
+
     monthly_expenses = 0
     additional_income = 0
 
